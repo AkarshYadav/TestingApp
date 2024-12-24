@@ -353,27 +353,18 @@ export async function PUT(req, { params }) {
             location.latitude,
             location.longitude
         );
-        
+
         if (distance > attendanceSession.radius) {
-            return NextResponse.json(
-                { 
-                    error: `You are too far from the class location.`,
-                    details: {
-                        calculatedDistance: Math.round(distance),
-                        allowedRadius: attendanceSession.radius,
-                        teacherLocation: {
-                            lat: attendanceSession.location.coordinates[1],
-                            lon: attendanceSession.location.coordinates[0]
-                        },
-                        studentLocation: {
-                            lat: location.latitude,
-                            lon: location.longitude
-                        }
-                    }
-                },
-                { status: 400 }
-            );
-        }
+    return NextResponse.json(
+        { 
+            error: `You are too far from the class location. Distance: ${Math.round(distance)} meters, Allowed Radius: ${attendanceSession.radius} meters. 
+                    Teacher Location: (${attendanceSession.location.coordinates[1]}, ${attendanceSession.location.coordinates[0]}), 
+                    Your Location: (${location.latitude}, ${location.longitude}).`
+        },
+        { status: 400 }
+    );
+}
+
         
 
         const alreadyMarked = attendanceSession.attendees.some(
