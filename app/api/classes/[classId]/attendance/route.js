@@ -7,51 +7,57 @@ import AttendanceSession from "@/lib/models/attendance.model";
 
 // Helper function to calculate distance between two points
 function calculateDistance(lat1, lon1, lat2, lon2) {
-    // Convert coordinates from degrees to radians
-    const toRad = (value) => value * (Math.PI / 180);
-    
-    const R = 6371; // Earth's radius in kilometers
-    const dLat = toRad(lat2 - lat1);
-    const dLon = toRad(lon2 - lon1);
-    
-    const a = 
-        Math.sin(dLat/2) * Math.sin(dLat/2) +
-        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * 
-        Math.sin(dLon/2) * Math.sin(dLon/2);
-    
+    const R = 6371e3; // Earth's radius in meters
+    const φ1 = lat1 * Math.PI/180;
+    const φ2 = lat2 * Math.PI/180;
+    const Δφ = (lat2-lat1) * Math.PI/180;
+    const Δλ = (lon2-lon1) * Math.PI/180;
+    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+            Math.cos(φ1) * Math.cos(φ2) *
+            Math.sin(Δλ/2) * Math.sin(Δλ/2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    const distance = R * c;
-    
-    // Convert distance to meters
-    return distance * 1000;
-}
-// Attendance Session Controller
-class AttendanceController {
-    static async verifyTeacher(classId, userId) {
-        const classDoc = await Class.findById(classId, { creator: 1 }).lean();
-        if (!classDoc || classDoc.creator.toString() !== userId) {
-            throw new Error('Unauthorized');
-        }
-        return classDoc;
-    }
 
-    static async startSession(classId, userId, location, radius, duration) {
-        const [existingSession] = await Promise.all([
-            AttendanceSession.findOne({
-                class: classId,
-                status: 'active'
-            }).lean(),
-            this.verifyTeacher(classId, userId)
+    return R * c; // Distance in meters
+}
+
+export async function POST(req, { params }) {
+    try {
+        const [session] = await Promise.all([
+            validateSession(),
+            connect()
         ]);
 
-        if (existingSession) {
-            throw new Error('ActiveSessionExists');
+        if (!session) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
-        const endTime = new Date(Date.now() + duration * 1000);
-        return await AttendanceSession.create({
+        const { location, radius, duration } = await req.json();
+        const classId = params.classId;
+
+        // Verify user is the class creator
+        const classDoc = await Class.findById(classId);
+        if (!classDoc || classDoc.creator.toString() !== session.user.id) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
+        // Check for active session
+        const activeSession = await AttendanceSession.findOne({
             class: classId,
-            creator: userId,
+            status: 'active'
+        });
+
+        if (activeSession) {
+            return NextResponse.json(
+                { error: "An active attendance session already exists" },
+                { status: 400 }
+            );
+        }
+
+        // Create attendance session
+        const endTime = new Date(Date.now() + duration * 1000);
+        const attendanceSession = await AttendanceSession.create({
+            class: classId,
+            creator: session.user.id,
             endTime,
             location: {
                 type: 'Point',
@@ -60,126 +66,14 @@ class AttendanceController {
             radius,
             status: 'active'
         });
-    }
 
-    static async extendSession(sessionId, userId, classId, duration) {
-        await this.verifyTeacher(classId, userId);
-
-        const existingSession = await AttendanceSession.findById(sessionId).lean();
-        if (!existingSession) {
-            throw new Error('SessionNotFound');
-        }
-
-        const newEndTime = new Date(existingSession.endTime.getTime() + duration * 1000);
-        return await AttendanceSession.findByIdAndUpdate(
-            sessionId,
-            { endTime: newEndTime, status: 'active' },
-            { new: true }
-        ).lean();
-    }
-
-    static async markAttendance(sessionId, userId, classId, location) {
-        const [enrollment, attendanceSession] = await Promise.all([
-            Enrollment.findOne({
-                class: classId,
-                student: userId,
-                status: 'active'
-            }).lean(),
-            AttendanceSession.findOne({
-                _id: sessionId,
-                class: classId,
-                status: 'active'
-            }).lean()
-        ]);
-    
-        if (!enrollment) throw new Error('NotEnrolled');
-        if (!attendanceSession) throw new Error('NoActiveSession');
-    
-        // Extract coordinates correctly
-        const sessionLat = attendanceSession.location.coordinates[1]; // Latitude
-        const sessionLon = attendanceSession.location.coordinates[0]; // Longitude
-        const studentLat = location.latitude;
-        const studentLon = location.longitude;
-    
-        // Calculate distance
-        const distance = calculateDistance(
-            sessionLat,
-            sessionLon,
-            studentLat,
-            studentLon
-        );
-    
-        // Add debug logging
-        console.log({
-            sessionLocation: {
-                lat: sessionLat,
-                lon: sessionLon
-            },
-            studentLocation: {
-                lat: studentLat,
-                lon: studentLon
-            },
-            calculatedDistance: distance,
-            allowedRadius: attendanceSession.radius
-        });
-    
-        if (distance > attendanceSession.radius) {
-            throw new Error(`TooFar:${Math.round(distance)}`);
-        }
-    
-        const alreadyMarked = attendanceSession.attendees.some(
-            a => a.student.toString() === userId
-        );
-    
-        if (alreadyMarked) throw new Error('AlreadyMarked');
-    
-        return await AttendanceSession.findByIdAndUpdate(
-            sessionId,
-            {
-                $push: {
-                    attendees: {
-                        student: userId,
-                        location: {
-                            type: 'Point',
-                            coordinates: [location.longitude, location.latitude]
-                        }
-                    }
-                }
-            }
-        ).lean();
-    }
-}
-
-// Start attendance session
-export async function POST(req, { params }) {
-    try {
-        const [session] = await Promise.all([
-            validateSession(),
-            connect()
-        ]);
-
-        const { location, radius, duration } = await req.json();
-        const classId = params.classId;
-
-        const attendanceSession = await AttendanceController.startSession(
-            classId,
-            session.user.id,
-            location,
-            radius,
-            duration
-        );
-
-        // Schedule session end without blocking
-        const sessionTimeout = new Promise((resolve) => {
-            setTimeout(async () => {
-                await AttendanceSession.findByIdAndUpdate(
-                    attendanceSession._id,
-                    { status: 'completed' }
-                );
-                resolve();
-            }, duration * 1000);
-        });
-        sessionTimeout.catch(console.error);
+        // Schedule session end
+        setTimeout(async () => {
+            await AttendanceSession.findByIdAndUpdate(
+                attendanceSession._id,
+                { status: 'completed' }
+            );
+        }, duration * 1000);
 
         return NextResponse.json({
             message: "Attendance session started",
@@ -189,82 +83,11 @@ export async function POST(req, { params }) {
     } catch (error) {
         console.error('Error starting attendance:', error);
         return NextResponse.json(
-            { error: error.message === 'ActiveSessionExists' 
-                ? "An active attendance session already exists"
-                : "Failed to start attendance session" 
-            },
-            { status: error.message === 'Unauthorized' ? 401 : 400 }
+            { error: "Failed to start attendance session" },
+            { status: 500 }
         );
     }
 }
-
-// Mark attendance or extend session
-// export async function PUT(req, { params }) {
-//     try {
-//         const [session] = await Promise.all([
-//             validateSession(),
-//             connect()
-//         ]);
-
-//         const { sessionId, location, duration } = await req.json();
-//         const classId = params.classId;
-
-//         if (duration) {
-//             const updatedSession = await AttendanceController.extendSession(
-//                 sessionId,
-//                 session.user.id,
-//                 classId,
-//                 duration
-//             );
-
-//             // Schedule new session end
-//             const sessionTimeout = new Promise((resolve) => {
-//                 setTimeout(async () => {
-//                     await AttendanceSession.findByIdAndUpdate(
-//                         updatedSession._id,
-//                         { status: 'completed' }
-//                     );
-//                     resolve();
-//                 }, updatedSession.endTime.getTime() - Date.now());
-//             });
-//             sessionTimeout.catch(console.error);
-
-//             return NextResponse.json({
-//                 message: "Attendance session extended",
-//                 sessionId: updatedSession._id,
-//                 newEndTime: updatedSession.endTime
-//             });
-//         }
-
-//         await AttendanceController.markAttendance(
-//             sessionId,
-//             session.user.id,
-//             classId,
-//             location
-//         );
-
-//         return NextResponse.json({ message: "Attendance marked successfully" });
-
-//     } catch (error) {
-//         console.error('Error handling PUT request:', error);
-//         const errorResponses = {
-//             'Unauthorized': { message: "Unauthorized", status: 401 },
-//             'NotEnrolled': { message: "Not enrolled in this class", status: 401 },
-//             'NoActiveSession': { message: "No active attendance session found", status: 404 },
-//             'TooFar': { message: "You are too far from the class location", status: 400 },
-//             'AlreadyMarked': { message: "Attendance already marked", status: 400 },
-//             'SessionNotFound': { message: "Attendance session not found", status: 404 }
-//         };
-
-//         const response = errorResponses[error.message] || 
-//             { message: "Failed to process request", status: 500 };
-
-//         return NextResponse.json(
-//             { error: response.message },
-//             { status: response.status }
-//         );
-//     }
-// }
 
 export async function PUT(req, { params }) {
     try {
@@ -280,7 +103,7 @@ export async function PUT(req, { params }) {
         const { sessionId, location, duration } = await req.json();
         const classId = params.classId;
 
-        // Check if this is a request to extend the session
+        // Handle session extension
         if (duration) {
             const classDoc = await Class.findById(classId);
             if (!classDoc || classDoc.creator.toString() !== session.user.id) {
@@ -296,13 +119,9 @@ export async function PUT(req, { params }) {
             }
 
             const newEndTime = new Date(existingSession.endTime.getTime() + duration * 1000);
-
             const updatedSession = await AttendanceSession.findByIdAndUpdate(
                 sessionId,
-                { 
-                    endTime: newEndTime,
-                    status: 'active' // Ensure it remains active
-                },
+                { endTime: newEndTime, status: 'active' },
                 { new: true }
             );
 
@@ -313,14 +132,14 @@ export async function PUT(req, { params }) {
                 );
             }, newEndTime.getTime() - Date.now());
 
-            return NextResponse.json({ 
+            return NextResponse.json({
                 message: "Attendance session extended",
                 sessionId: updatedSession._id,
                 newEndTime
             });
         }
 
-        // If no duration is provided, proceed with marking attendance
+        // Handle attendance marking
         const enrollment = await Enrollment.findOne({
             class: classId,
             student: session.user.id,
@@ -347,25 +166,53 @@ export async function PUT(req, { params }) {
             );
         }
 
+        // Calculate distance using the original working method
+        const teacherLat = attendanceSession.location.coordinates[1];
+        const teacherLon = attendanceSession.location.coordinates[0];
+        const studentLat = location.latitude;
+        const studentLon = location.longitude;
+
         const distance = calculateDistance(
-            attendanceSession.location.coordinates[1], // Latitude
-            attendanceSession.location.coordinates[0], // Longitude
-            location.latitude,
-            location.longitude
+            studentLat,
+            studentLon,
+            teacherLat,
+            teacherLon
         );
 
-        if (distance > attendanceSession.radius) {
-    return NextResponse.json(
-        { 
-            error: `You are too far from the class location. Distance: ${Math.round(distance)} meters, Allowed Radius: ${attendanceSession.radius} meters. 
-                    Teacher Location: (${attendanceSession.location.coordinates[1]}, ${attendanceSession.location.coordinates[0]}), 
-                    Your Location: (${location.latitude}, ${location.longitude}).`
-        },
-        { status: 400 }
-    );
-}
+        // Debug information
+        console.log({
+            teacherLocation: {
+                latitude: teacherLat,
+                longitude: teacherLon
+            },
+            studentLocation: {
+                latitude: studentLat,
+                longitude: studentLon
+            },
+            calculatedDistance: Math.round(distance),
+            allowedRadius: attendanceSession.radius
+        });
 
-        
+        if (distance > attendanceSession.radius) {
+            return NextResponse.json(
+                {
+                    error: "Location verification failed",
+                    details: {
+                        distance: Math.round(distance),
+                        allowedRadius: attendanceSession.radius,
+                        teacherLocation: {
+                            latitude: teacherLat,
+                            longitude: teacherLon
+                        },
+                        studentLocation: {
+                            latitude: studentLat,
+                            longitude: studentLon
+                        }
+                    }
+                },
+                { status: 400 }
+            );
+        }
 
         const alreadyMarked = attendanceSession.attendees.some(
             a => a.student.toString() === session.user.id
@@ -387,13 +234,17 @@ export async function PUT(req, { params }) {
                         location: {
                             type: 'Point',
                             coordinates: [location.longitude, location.latitude]
-                        }
+                        },
+                        distanceFromTeacher: Math.round(distance)
                     }
                 }
             }
         );
 
-        return NextResponse.json({ message: "Attendance marked successfully" });
+        return NextResponse.json({ 
+            message: "Attendance marked successfully",
+            distance: Math.round(distance)
+        });
 
     } catch (error) {
         console.error('Error handling PUT request:', error);
@@ -403,7 +254,6 @@ export async function PUT(req, { params }) {
         );
     }
 }
-
 // Get attendance session status
 export async function GET(req, { params }) {
     try {
