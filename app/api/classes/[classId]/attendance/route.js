@@ -324,13 +324,14 @@ export async function PUT(req, { params }) {
         if (distance > attendanceSession.radius) {
             return NextResponse.json(
                 { 
-                    error: "You are too far from the class location", 
-                    distance: Math.round(distance), // Include the distance in the response
+                    error: `You are too far from the class location. Distance is ${Math.round(distance)} meters.`,
+                    distance: Math.round(distance), // Include the distance in the response separately
                     allowedRadius: attendanceSession.radius 
                 },
                 { status: 400 }
             );
         }
+        
 
         const alreadyMarked = attendanceSession.attendees.some(
             a => a.student.toString() === session.user.id
