@@ -7,12 +7,24 @@ import AttendanceSession from "@/lib/models/attendance.model";
 
 // Helper function to calculate distance between two points
 function calculateDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371e3; // Earth radius in meters
-    const x = (lon2 - lon1) * Math.cos((lat1 + lat2) * Math.PI / 360); // Average latitude
-    const y = (lat2 - lat1);
-    return Math.sqrt(x * x + y * y) * R;
+    // Convert coordinates from degrees to radians
+    const toRad = (value) => value * (Math.PI / 180);
+    
+    const R = 6371; // Earth's radius in kilometers
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    
+    const a = 
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * 
+        Math.sin(dLon/2) * Math.sin(dLon/2);
+    
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const distance = R * c;
+    
+    // Convert distance to meters
+    return distance * 1000;
 }
-
 // Attendance Session Controller
 class AttendanceController {
     static async verifyTeacher(classId, userId) {
@@ -79,27 +91,48 @@ class AttendanceController {
                 status: 'active'
             }).lean()
         ]);
-
+    
         if (!enrollment) throw new Error('NotEnrolled');
         if (!attendanceSession) throw new Error('NoActiveSession');
-
+    
+        // Extract coordinates correctly
+        const sessionLat = attendanceSession.location.coordinates[1]; // Latitude
+        const sessionLon = attendanceSession.location.coordinates[0]; // Longitude
+        const studentLat = location.latitude;
+        const studentLon = location.longitude;
+    
+        // Calculate distance
         const distance = calculateDistance(
-            location.latitude,
-            location.longitude,
-            attendanceSession.location.coordinates[1],
-            attendanceSession.location.coordinates[0]
+            sessionLat,
+            sessionLon,
+            studentLat,
+            studentLon
         );
-
+    
+        // Add debug logging
+        console.log({
+            sessionLocation: {
+                lat: sessionLat,
+                lon: sessionLon
+            },
+            studentLocation: {
+                lat: studentLat,
+                lon: studentLon
+            },
+            calculatedDistance: distance,
+            allowedRadius: attendanceSession.radius
+        });
+    
         if (distance > attendanceSession.radius) {
-            throw new Error('TooFar');
+            throw new Error(`TooFar:${Math.round(distance)}`);
         }
-
+    
         const alreadyMarked = attendanceSession.attendees.some(
             a => a.student.toString() === userId
         );
-
+    
         if (alreadyMarked) throw new Error('AlreadyMarked');
-
+    
         return await AttendanceSession.findByIdAndUpdate(
             sessionId,
             {
@@ -315,18 +348,28 @@ export async function PUT(req, { params }) {
         }
 
         const distance = calculateDistance(
+            attendanceSession.location.coordinates[1], // Latitude
+            attendanceSession.location.coordinates[0], // Longitude
             location.latitude,
-            location.longitude,
-            attendanceSession.location.coordinates[1],
-            attendanceSession.location.coordinates[0]
+            location.longitude
         );
-
+        
         if (distance > attendanceSession.radius) {
             return NextResponse.json(
                 { 
-                    error: `You are too far from the class location. Distance is ${Math.round(distance)} meters.`,
-                    distance: Math.round(distance), // Include the distance in the response separately
-                    allowedRadius: attendanceSession.radius 
+                    error: `You are too far from the class location.`,
+                    details: {
+                        calculatedDistance: Math.round(distance),
+                        allowedRadius: attendanceSession.radius,
+                        teacherLocation: {
+                            lat: attendanceSession.location.coordinates[1],
+                            lon: attendanceSession.location.coordinates[0]
+                        },
+                        studentLocation: {
+                            lat: location.latitude,
+                            lon: location.longitude
+                        }
+                    }
                 },
                 { status: 400 }
             );
