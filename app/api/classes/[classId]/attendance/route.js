@@ -7,16 +7,10 @@ import AttendanceSession from "@/lib/models/attendance.model";
 
 // Helper function to calculate distance between two points
 function calculateDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371e3;
-    const φ1 = lat1 * Math.PI/180;
-    const φ2 = lat2 * Math.PI/180;
-    const Δφ = (lat2-lat1) * Math.PI/180;
-    const Δλ = (lon2-lon1) * Math.PI/180;
-    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-            Math.cos(φ1) * Math.cos(φ2) *
-            Math.sin(Δλ/2) * Math.sin(Δλ/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c;
+    const R = 6371e3; // Earth radius in meters
+    const x = (lon2 - lon1) * Math.cos((lat1 + lat2) * Math.PI / 360); // Average latitude
+    const y = (lat2 - lat1);
+    return Math.sqrt(x * x + y * y) * R;
 }
 
 // Attendance Session Controller
@@ -255,13 +249,11 @@ export async function PUT(req, { params }) {
 
         // Check if this is a request to extend the session
         if (duration) {
-            // Verify user is the class creator
             const classDoc = await Class.findById(classId);
             if (!classDoc || classDoc.creator.toString() !== session.user.id) {
                 return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
             }
 
-            // Find the existing session
             const existingSession = await AttendanceSession.findById(sessionId);
             if (!existingSession) {
                 return NextResponse.json(
@@ -270,10 +262,8 @@ export async function PUT(req, { params }) {
                 );
             }
 
-            // Calculate the new end time
             const newEndTime = new Date(existingSession.endTime.getTime() + duration * 1000);
 
-            // Update the session with the new end time
             const updatedSession = await AttendanceSession.findByIdAndUpdate(
                 sessionId,
                 { 
@@ -283,7 +273,6 @@ export async function PUT(req, { params }) {
                 { new: true }
             );
 
-            // Schedule the new session end
             setTimeout(async () => {
                 await AttendanceSession.findByIdAndUpdate(
                     updatedSession._id,
@@ -312,7 +301,6 @@ export async function PUT(req, { params }) {
             );
         }
 
-        // Get active attendance session
         const attendanceSession = await AttendanceSession.findOne({
             _id: sessionId,
             class: classId,
@@ -326,7 +314,6 @@ export async function PUT(req, { params }) {
             );
         }
 
-        // Calculate distance between student and class location
         const distance = calculateDistance(
             location.latitude,
             location.longitude,
@@ -336,12 +323,15 @@ export async function PUT(req, { params }) {
 
         if (distance > attendanceSession.radius) {
             return NextResponse.json(
-                { error: "You are too far from the class location" },
+                { 
+                    error: "You are too far from the class location", 
+                    distance: Math.round(distance), // Include the distance in the response
+                    allowedRadius: attendanceSession.radius 
+                },
                 { status: 400 }
             );
         }
 
-        // Check if student already marked attendance
         const alreadyMarked = attendanceSession.attendees.some(
             a => a.student.toString() === session.user.id
         );
@@ -353,7 +343,6 @@ export async function PUT(req, { params }) {
             );
         }
 
-        // Mark attendance
         await AttendanceSession.findByIdAndUpdate(
             sessionId,
             {
