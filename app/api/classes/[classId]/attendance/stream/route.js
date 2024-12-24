@@ -1,7 +1,9 @@
 // Optimized SSE route
+import {validateSession} from '@/lib/session.js'
+import connect from "@/lib/mongodb/mongoose";
 export async function GET(request, context) {
   try {
-    await Promise.all([validateSession(), connectDB()]);
+    await Promise.all([validateSession(), connect()]);
     
     const { classId } = await context.params;
     let lastAttendees = null;
