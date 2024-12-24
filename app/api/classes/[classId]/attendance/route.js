@@ -172,6 +172,73 @@ export async function POST(req, { params }) {
 }
 
 // Mark attendance or extend session
+// export async function PUT(req, { params }) {
+//     try {
+//         const [session] = await Promise.all([
+//             validateSession(),
+//             connect()
+//         ]);
+
+//         const { sessionId, location, duration } = await req.json();
+//         const classId = params.classId;
+
+//         if (duration) {
+//             const updatedSession = await AttendanceController.extendSession(
+//                 sessionId,
+//                 session.user.id,
+//                 classId,
+//                 duration
+//             );
+
+//             // Schedule new session end
+//             const sessionTimeout = new Promise((resolve) => {
+//                 setTimeout(async () => {
+//                     await AttendanceSession.findByIdAndUpdate(
+//                         updatedSession._id,
+//                         { status: 'completed' }
+//                     );
+//                     resolve();
+//                 }, updatedSession.endTime.getTime() - Date.now());
+//             });
+//             sessionTimeout.catch(console.error);
+
+//             return NextResponse.json({
+//                 message: "Attendance session extended",
+//                 sessionId: updatedSession._id,
+//                 newEndTime: updatedSession.endTime
+//             });
+//         }
+
+//         await AttendanceController.markAttendance(
+//             sessionId,
+//             session.user.id,
+//             classId,
+//             location
+//         );
+
+//         return NextResponse.json({ message: "Attendance marked successfully" });
+
+//     } catch (error) {
+//         console.error('Error handling PUT request:', error);
+//         const errorResponses = {
+//             'Unauthorized': { message: "Unauthorized", status: 401 },
+//             'NotEnrolled': { message: "Not enrolled in this class", status: 401 },
+//             'NoActiveSession': { message: "No active attendance session found", status: 404 },
+//             'TooFar': { message: "You are too far from the class location", status: 400 },
+//             'AlreadyMarked': { message: "Attendance already marked", status: 400 },
+//             'SessionNotFound': { message: "Attendance session not found", status: 404 }
+//         };
+
+//         const response = errorResponses[error.message] || 
+//             { message: "Failed to process request", status: 500 };
+
+//         return NextResponse.json(
+//             { error: response.message },
+//             { status: response.status }
+//         );
+//     }
+// }
+
 export async function PUT(req, { params }) {
     try {
         const [session] = await Promise.all([
@@ -179,62 +246,136 @@ export async function PUT(req, { params }) {
             connect()
         ]);
 
+        if (!session) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
         const { sessionId, location, duration } = await req.json();
         const classId = params.classId;
 
+        // Check if this is a request to extend the session
         if (duration) {
-            const updatedSession = await AttendanceController.extendSession(
+            // Verify user is the class creator
+            const classDoc = await Class.findById(classId);
+            if (!classDoc || classDoc.creator.toString() !== session.user.id) {
+                return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+            }
+
+            // Find the existing session
+            const existingSession = await AttendanceSession.findById(sessionId);
+            if (!existingSession) {
+                return NextResponse.json(
+                    { error: "Attendance session not found" },
+                    { status: 404 }
+                );
+            }
+
+            // Calculate the new end time
+            const newEndTime = new Date(existingSession.endTime.getTime() + duration * 1000);
+
+            // Update the session with the new end time
+            const updatedSession = await AttendanceSession.findByIdAndUpdate(
                 sessionId,
-                session.user.id,
-                classId,
-                duration
+                { 
+                    endTime: newEndTime,
+                    status: 'active' // Ensure it remains active
+                },
+                { new: true }
             );
 
-            // Schedule new session end
-            const sessionTimeout = new Promise((resolve) => {
-                setTimeout(async () => {
-                    await AttendanceSession.findByIdAndUpdate(
-                        updatedSession._id,
-                        { status: 'completed' }
-                    );
-                    resolve();
-                }, updatedSession.endTime.getTime() - Date.now());
-            });
-            sessionTimeout.catch(console.error);
+            // Schedule the new session end
+            setTimeout(async () => {
+                await AttendanceSession.findByIdAndUpdate(
+                    updatedSession._id,
+                    { status: 'completed' }
+                );
+            }, newEndTime.getTime() - Date.now());
 
-            return NextResponse.json({
+            return NextResponse.json({ 
                 message: "Attendance session extended",
                 sessionId: updatedSession._id,
-                newEndTime: updatedSession.endTime
+                newEndTime
             });
         }
 
-        await AttendanceController.markAttendance(
+        // If no duration is provided, proceed with marking attendance
+        const enrollment = await Enrollment.findOne({
+            class: classId,
+            student: session.user.id,
+            status: 'active'
+        });
+
+        if (!enrollment) {
+            return NextResponse.json(
+                { error: "Not enrolled in this class" },
+                { status: 401 }
+            );
+        }
+
+        // Get active attendance session
+        const attendanceSession = await AttendanceSession.findOne({
+            _id: sessionId,
+            class: classId,
+            status: 'active'
+        });
+
+        if (!attendanceSession) {
+            return NextResponse.json(
+                { error: "No active attendance session found" },
+                { status: 404 }
+            );
+        }
+
+        // Calculate distance between student and class location
+        const distance = calculateDistance(
+            location.latitude,
+            location.longitude,
+            attendanceSession.location.coordinates[1],
+            attendanceSession.location.coordinates[0]
+        );
+
+        if (distance > attendanceSession.radius) {
+            return NextResponse.json(
+                { error: "You are too far from the class location" },
+                { status: 400 }
+            );
+        }
+
+        // Check if student already marked attendance
+        const alreadyMarked = attendanceSession.attendees.some(
+            a => a.student.toString() === session.user.id
+        );
+
+        if (alreadyMarked) {
+            return NextResponse.json(
+                { error: "Attendance already marked" },
+                { status: 400 }
+            );
+        }
+
+        // Mark attendance
+        await AttendanceSession.findByIdAndUpdate(
             sessionId,
-            session.user.id,
-            classId,
-            location
+            {
+                $push: {
+                    attendees: {
+                        student: session.user.id,
+                        location: {
+                            type: 'Point',
+                            coordinates: [location.longitude, location.latitude]
+                        }
+                    }
+                }
+            }
         );
 
         return NextResponse.json({ message: "Attendance marked successfully" });
 
     } catch (error) {
         console.error('Error handling PUT request:', error);
-        const errorResponses = {
-            'Unauthorized': { message: "Unauthorized", status: 401 },
-            'NotEnrolled': { message: "Not enrolled in this class", status: 401 },
-            'NoActiveSession': { message: "No active attendance session found", status: 404 },
-            'TooFar': { message: "You are too far from the class location", status: 400 },
-            'AlreadyMarked': { message: "Attendance already marked", status: 400 },
-            'SessionNotFound': { message: "Attendance session not found", status: 404 }
-        };
-
-        const response = errorResponses[error.message] || 
-            { message: "Failed to process request", status: 500 };
-
         return NextResponse.json(
-            { error: response.message },
-            { status: response.status }
+            { error: "Failed to process request" },
+            { status: 500 }
         );
     }
 }
