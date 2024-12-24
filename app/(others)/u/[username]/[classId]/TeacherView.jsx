@@ -84,15 +84,43 @@ const TeacherView = ({
         setSessionExpired(false);
     };
 
-    const handleConfirmStart = () => {
-        setQrCodeValue(uniqueKey);
-
-        onStartAttendance({
-            duration: duration * 60,
-            radius,
-        });
-        setShowDurationModal(false);
-        setSessionExpired(false);
+    const handleConfirmStart = async () => {
+        try {
+            // Get location with high accuracy
+            const position = await new Promise((resolve, reject) => {
+                navigator.geolocation.getCurrentPosition(
+                    resolve,
+                    reject,
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 10000,
+                        maximumAge: 0
+                    }
+                );
+            });
+    
+            // Log coordinates for debugging
+            console.log('Teacher coordinates:', {
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+                accuracy: position.coords.accuracy
+            });
+    
+            onStartAttendance({
+                duration: duration * 60,
+                radius,
+                location: {
+                    latitude: position.coords.latitude,
+                    longitude: position.coords.longitude,
+                    accuracy: position.coords.accuracy
+                }
+            });
+            setShowDurationModal(false);
+            setSessionExpired(false);
+        } catch (error) {
+            console.error('Location error:', error);
+            alert('Failed to get accurate location. Please ensure GPS is enabled and try again.');
+        }
     };
 
     const handleExtendSession = () => {
