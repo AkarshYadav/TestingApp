@@ -74,85 +74,85 @@ class AttendanceController {
         ).lean();
     }
 
-    static async markAttendance(sessionId, userId, classId, location) {
-        const [enrollment, attendanceSession] = await Promise.all([
-            Enrollment.findOne({
-                class: classId,
-                student: userId,
-                status: 'active'
-            }).lean(),
-            AttendanceSession.findOne({
-                _id: sessionId,
-                class: classId,
-                status: 'active'
-            }).lean()
-        ]);
-    
-        if (!enrollment) throw new Error('NotEnrolled');
-        if (!attendanceSession) throw new Error('NoActiveSession');
-    
-        // Get coordinates in correct order
-        const teacherLocation = {
-            latitude: attendanceSession.location.coordinates[1],
-            longitude: attendanceSession.location.coordinates[0]
-        };
-    
-        const studentLocation = {
-            latitude: location.latitude,
-            longitude: location.longitude
-        };
-    
-        // Calculate distance
-        const distance = calculateDistance(
-            teacherLocation.latitude,
-            teacherLocation.longitude,
-            studentLocation.latitude,
-            studentLocation.longitude
-        );
-    
-        // Debug logging
-        console.log({
-            teacherLocation,
-            studentLocation,
-            calculatedDistance: Math.round(distance),
-            allowedRadius: attendanceSession.radius,
-            coordinates: {
-                stored: attendanceSession.location.coordinates,
-                received: [location.longitude, location.latitude]
-            }
-        });
-    
-        // Add buffer to radius for GPS inaccuracy (e.g., 10 meters)
-        const bufferRadius = attendanceSession.radius + 10;
-    
-        if (distance > bufferRadius) {
-            throw new Error(`TooFar:${Math.round(distance)}:${bufferRadius}`);
+   static async markAttendance(sessionId, userId, classId, location) {
+    const [enrollment, attendanceSession] = await Promise.all([
+        Enrollment.findOne({
+            class: classId,
+            student: userId,
+            status: 'active'
+        }).lean(),
+        AttendanceSession.findOne({
+            _id: sessionId,
+            class: classId,
+            status: 'active'
+        }).lean()
+    ]);
+
+    if (!enrollment) throw new Error('NotEnrolled');
+    if (!attendanceSession) throw new Error('NoActiveSession');
+
+    // Get coordinates in correct order
+    const teacherLocation = {
+        latitude: attendanceSession.location.coordinates[1],
+        longitude: attendanceSession.location.coordinates[0]
+    };
+
+    const studentLocation = {
+        latitude: location.latitude,
+        longitude: location.longitude
+    };
+
+    // Calculate distance
+    const distance = calculateDistance(
+        teacherLocation.latitude,
+        teacherLocation.longitude,
+        studentLocation.latitude,
+        studentLocation.longitude
+    );
+
+    // Debug logging
+    console.log({
+        teacherLocation,
+        studentLocation,
+        calculatedDistance: Math.round(distance),
+        allowedRadius: attendanceSession.radius,
+        coordinates: {
+            stored: attendanceSession.location.coordinates,
+            received: [location.longitude, location.latitude]
         }
-    
-        const alreadyMarked = attendanceSession.attendees.some(
-            a => a.student.toString() === userId
-        );
-    
-        if (alreadyMarked) throw new Error('AlreadyMarked');
-    
-        // Store coordinates in GeoJSON format
-        return await AttendanceSession.findByIdAndUpdate(
-            sessionId,
-            {
-                $push: {
-                    attendees: {
-                        student: userId,
-                        location: {
-                            type: 'Point',
-                            coordinates: [location.longitude, location.latitude]
-                        },
-                        distance: Math.round(distance)
-                    }
-                }
-            },
-            { new: true }
-        ).lean();
+    });
+
+    // Add buffer to radius for GPS inaccuracy (e.g., 10 meters)
+    const bufferRadius = attendanceSession.radius + 10;
+
+    if (distance > bufferRadius) {
+        throw new Error(`TooFar:${Math.round(distance)}:${bufferRadius}`);
     }
+
+    const alreadyMarked = attendanceSession.attendees.some(
+        a => a.student.toString() === userId
+    );
+
+    if (alreadyMarked) throw new Error('AlreadyMarked');
+
+    // Store coordinates in GeoJSON format
+    return await AttendanceSession.findByIdAndUpdate(
+        sessionId,
+        {
+            $push: {
+                attendees: {
+                    student: userId,
+                    location: {
+                        type: 'Point',
+                        coordinates: [location.longitude, location.latitude]
+                    },
+                    distance: Math.round(distance)
+                }
+            }
+        },
+        { new: true }
+    ).lean();
+}
 }
 
 // Start attendance session
@@ -262,7 +262,7 @@ export async function PUT(req, { params }) {
         };
 
         const response = errorResponses[error.message] || 
-            { message: "Failed to process request", status: 500 };
+            { message: error.message, status: 500 };
 
         return NextResponse.json(
             { error: response.message },
@@ -290,7 +290,9 @@ export async function GET(req, { params }) {
                 student: session.user.id,
                 status: 'active'
             }).lean(),
+
             Class.findById(classId, { creator: 1 }).lean(),
+
             AttendanceSession.findOne({
                 class: classId,
                 status: 'active'
