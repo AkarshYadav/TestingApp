@@ -332,16 +332,23 @@ export async function GET(req, { params }) {
 // End attendance session
 export async function PATCH(req, { params }) {
     try {
-        const [session] = await Promise.all([
-            validateSession(),
-            connect()
-        ]);
+        await connect();
+        const session = await getServerSession(authOptions);
+        
+        if (!session) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
 
         const { sessionId } = await req.json();
-        const classId = params.classId;
+        const classId =await params.classId;
 
-        await AttendanceController.verifyTeacher(classId, session.user.id);
+        // Verify user is the class creator
+        const classDoc = await Class.findById(classId);
+        if (!classDoc || classDoc.creator.toString() !== session.user.id) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
 
+        // End the session
         await AttendanceSession.findByIdAndUpdate(
             sessionId,
             { status: 'completed' }
@@ -352,8 +359,8 @@ export async function PATCH(req, { params }) {
     } catch (error) {
         console.error('Error ending attendance session:', error);
         return NextResponse.json(
-            { error: error.message === 'Unauthorized' ? "Unauthorized" : "Failed to end attendance session" },
-            { status: error.message === 'Unauthorized' ? 401 : 500 }
+            { error: "Failed to end attendance session" },
+            { status: 500 }
         );
     }
 }
