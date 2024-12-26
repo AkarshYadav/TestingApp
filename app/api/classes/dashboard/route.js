@@ -8,9 +8,9 @@ import Enrollment from "@/lib/models/enrollment.model";
 
 export async function GET() {
   try {
-    // Connect to the database and fetch session concurrently
-    const [session] = await Promise.all([connect(), getServerSession()]);
-
+    await connect();
+    
+    const session = await getServerSession();
     if (!session) {
       return NextResponse.json(
         { error: "Not authenticated" },
@@ -18,8 +18,8 @@ export async function GET() {
       );
     }
 
-    // Find the user by email
-    const user = await User.findOne({ email: session.user.email }).lean();
+    // First find the user
+    const user = await User.findOne({ email: session.user.email });
     if (!user) {
       return NextResponse.json(
         { error: "User not found" },
@@ -27,35 +27,33 @@ export async function GET() {
       );
     }
 
-    // Fetch created classes and active enrollments concurrently
-    const [createdClasses, activeEnrollments] = await Promise.all([
-      Class.find({ _id: { $in: user.createdClasses } })
-        .select("className subject classCode description section")
-        .lean(),
-      Enrollment.find({
-        _id: { $in: user.enrolledIn },
-        status: "active",
-      })
-        .populate({
-          path: "class",
-          select: "className subject classCode description section creator",
-          populate: {
-            path: "creator",
-            select: "email",
-          },
-        })
-        .lean(),
-    ]);
+    // Fetch created classes
+    const createdClasses = await Class.find({
+      _id: { $in: user.createdClasses }
+    }).select('className subject classCode description section');
 
-    // Extract class data from active enrollments
-    const enrolledClasses = activeEnrollments.map((enrollment) => enrollment.class);
+    // Fetch active enrollments with populated class data
+    const enrollments = await Enrollment.find({
+      _id: { $in: user.enrolledIn },
+      status: 'active'
+    }).populate({
+      path: 'class',
+      select: 'className subject classCode description section creator',
+      populate: {
+        path: 'creator',
+        select: 'email'
+      }
+    });
+
+    // Extract class data from enrollments
+    const enrolledClasses = enrollments.map(enrollment => enrollment.class);
 
     return NextResponse.json({
       createdClasses,
-      enrolledClasses,
+      enrolledClasses
     });
   } catch (error) {
-    console.error("Dashboard API Error:", error);
+    console.error('Dashboard API Error:', error);
     return NextResponse.json(
       { error: "Internal Server Error" },
       { status: 500 }
