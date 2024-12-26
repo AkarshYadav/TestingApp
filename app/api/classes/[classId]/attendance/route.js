@@ -332,54 +332,29 @@ export async function GET(req, { params }) {
 // End attendance session
 export async function PATCH(req, { params }) {
     try {
-      await connect();
-      console.log("Database connected");
-  
-      const session = await getServerSession(authOptions);
-  
-      if (!session) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
-  
-      const { sessionId } = await req.json();
-      const classId = params.classId;
-  
-      console.log("Session ID:", sessionId);
-      console.log("Class ID:", classId);
-  
-      // Verify user is the class creator
-      const classDoc = await Class.findById(classId);
-  
-      if (!classDoc) {
-        console.error("Class not found:", classId);
-        return NextResponse.json({ error: "Class not found" }, { status: 404 });
-      }
-  
-      if (classDoc.creator.toString() !== session.user.id) {
-        console.error("Unauthorized user:", session.user.id);
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
-  
-      // End the session
-      const updatedSession = await AttendanceSession.findByIdAndUpdate(
-        sessionId,
-        { status: 'completed' },
-        { new: true }
-      );
-  
-      if (!updatedSession) {
-        console.error("Attendance session not found:", sessionId);
-        return NextResponse.json({ error: "Attendance session not found" }, { status: 404 });
-      }
-  
-      return NextResponse.json({ message: "Attendance session ended" });
-  
+        const [session] = await Promise.all([
+            validateSession(),
+            connect()
+        ]);
+
+        const { sessionId } = await req.json();
+        const classId = params.classId;
+
+        await AttendanceController.verifyTeacher(classId, session.user.id);
+
+        await AttendanceSession.findByIdAndUpdate(
+            sessionId,
+            { status: 'completed' }
+        );
+
+        return NextResponse.json({ message: "Attendance session ended" });
+
     } catch (error) {
-      console.error("Error ending attendance session:", error.message, error.stack);
-      return NextResponse.json(
-        { error: "Failed to end attendance session" },
-        { status: 500 }
-      );
+        console.error('Error ending attendance session:', error);
+        return NextResponse.json(
+            { error: error.message === 'Unauthorized' ? "Unauthorized" : "Failed to end attendance session" },
+            { status: error.message === 'Unauthorized' ? 401 : 500 }
+        );
     }
-  }
+}
   
