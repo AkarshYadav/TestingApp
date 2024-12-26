@@ -1,63 +1,65 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Clock, MapPin, Check } from 'lucide-react';
+import { Clock, MapPin, Check, Loader2 } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 const StudentView = ({ classId, classData, isActive, hasMarked, timeLeft, progressValue, onMarkAttendance }) => {
     const [enteredKey, setEnteredKey] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
-    const handleKeyChange = (e) => setEnteredKey(e.target.value);
+    const handleKeyChange = (e) => {
+        setEnteredKey(e.target.value);
+        setError(''); // Clear error when user types
+    };
 
     const handleAttendanceMark = async () => {
+        if (!enteredKey.trim()) {
+            setError('Please enter a key');
+            return;
+        }
+
         setLoading(true);
         setError('');
-        console.log(`classId: ${classId}`);
-    
+
         try {
-            // Ensure classId is correctly included in the query parameters
-            const response = await fetch(`/api/classes/${classId}/get-latest-key?classId=${classId}`, {
+            // First, fetch the latest key
+            const keyResponse = await fetch(`/api/classes/${classId}/get-latest-key`, {
                 method: 'GET',
                 headers: {
                     'Content-Type': 'application/json',
                 },
             });
-    
-            const data = await response.json();
-    
-            // Check if the response is not OK
-            if (!response.ok) {
-                throw new Error(data.message || 'Failed to fetch the key.');
+
+            if (!keyResponse.ok) {
+                throw new Error(`Failed to verify key: ${keyResponse.status}`);
             }
-    
-            // Extract the latest key from the response
-            const { latestKey } = data;
-    
-            console.log('Fetched Latest Key:', latestKey); // Log fetched key for debugging
-            console.log('Entered Key:', enteredKey); // Log entered key for debugging
-    
-            // Compare the entered key with the fetched latest key
-            if (enteredKey.trim() === latestKey.trim()) {
-                console.log('Keys Match! Attendance Marked');
-                onMarkAttendance();
-                setError('');
+
+            const keyData = await keyResponse.json();
+
+            if (!keyData.success) {
+                throw new Error(keyData.message || 'Failed to verify key');
+            }
+
+            // Compare the keys
+            if (enteredKey.trim() === keyData.latestKey.trim()) {
+                // If keys match, mark attendance
+                await onMarkAttendance();
+                setEnteredKey('');
             } else {
-                console.log('Keys Do Not Match:', { enteredKey, latestKey });
                 setError('Invalid or expired key. Please check with your teacher.');
             }
         } catch (err) {
-            console.error('Error verifying key:', err);
-            setError('Something went wrong. Please try again.');
+            console.error('Attendance marking error:', err);
+            setError(err.message || 'Something went wrong. Please try again.');
         } finally {
             setLoading(false);
         }
     };
-    
-
 
     return (
         <div className="space-y-4">
@@ -83,9 +85,9 @@ const StudentView = ({ classId, classData, isActive, hasMarked, timeLeft, progre
                             <Progress value={progressValue} className="w-full" />
 
                             {!hasMarked ? (
-                                <div className="w-full flex flex-col">
-                                    <div className="flex my-5">
-                                        <p className="text-sm text-muted-foreground w-2/3 flex items-center">
+                                <div className="w-full flex flex-col space-y-4">
+                                    <div className="flex flex-col space-y-2">
+                                        <p className="text-sm text-muted-foreground">
                                             Enter the unique key provided to you to mark your attendance.
                                         </p>
                                         <input
@@ -93,23 +95,30 @@ const StudentView = ({ classId, classData, isActive, hasMarked, timeLeft, progre
                                             value={enteredKey}
                                             onChange={handleKeyChange}
                                             placeholder="Enter your key"
-                                            className="w-1/3 p-2 border border-gray-300 rounded"
+                                            className="w-full p-2 border border-gray-300 rounded"
+                                            disabled={loading}
                                         />
                                     </div>
 
                                     {error && (
-                                        <div className="text-red-500 mb-4">
-                                            <p>{error}</p>
-                                        </div>
+                                        <Alert variant="destructive">
+                                            <AlertDescription>{error}</AlertDescription>
+                                        </Alert>
                                     )}
 
                                     <Button
                                         onClick={handleAttendanceMark}
                                         className="w-full"
-                                        disabled={!enteredKey}
+                                        disabled={!enteredKey.trim() || loading}
                                     >
-                                        <MapPin className="h-4 w-4 mr-2" />
-                                        Mark Attendance
+                                        {loading ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : (
+                                            <>
+                                                <MapPin className="h-4 w-4 mr-2" />
+                                                Mark Attendance
+                                            </>
+                                        )}
                                     </Button>
                                 </div>
                             ) : (
@@ -125,6 +134,5 @@ const StudentView = ({ classId, classData, isActive, hasMarked, timeLeft, progre
         </div>
     );
 };
-
 
 export default StudentView;

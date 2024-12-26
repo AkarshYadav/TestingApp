@@ -1,16 +1,29 @@
 import connect from "@/lib/mongodb/mongoose";
 import AttendanceKey from "@/lib/models/AttendanceKey.model";
 
-export const GET = async (req) => {
+export const GET = async (req, { params }) => {
     try {
-        // Extract classId from the query parameters (from the URL)
+        // Extract classId from both URL params and query params
         const url = new URL(req.url);
-        const classId = url.searchParams.get('classId');
+        const queryClassId = url.searchParams.get('classId');
+        const urlClassId = url.pathname.split('/').filter(Boolean)[2]; // Extracts from URL path
+        
+        // Use either the query param or URL param
+        const classId = queryClassId || urlClassId;
 
         if (!classId) {
+            console.log("Missing classId in both query and URL params");
             return new Response(
-                JSON.stringify({ message: "Missing classId in query." }),
-                { status: 400 }
+                JSON.stringify({ 
+                    success: false,
+                    message: "Missing classId parameter" 
+                }),
+                { 
+                    status: 400,
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                }
             );
         }
 
@@ -18,27 +31,59 @@ export const GET = async (req) => {
         await connect();
         console.log("Querying Database for Class ID:", classId);
 
-        // Fetch the latest attendance key for the class (sorted by `createdAt`)
-        const latestKey = await AttendanceKey.findOne({ classId }).sort({ createdAt: -1 }).exec();
+        // Fetch the latest attendance key for the class
+        const latestKey = await AttendanceKey.findOne({ classId })
+            .sort({ createdAt: -1 })
+            .select('key createdAt')
+            .lean()
+            .exec();
 
         if (!latestKey) {
-            console.log("No key found for this class.");
+            console.log("No key found for class:", classId);
             return new Response(
-                JSON.stringify({ message: "No key found for this class." }),
-                { status: 404 }
+                JSON.stringify({ 
+                    success: false,
+                    message: "No active key found for this class" 
+                }),
+                { 
+                    status: 404,
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                }
             );
         }
 
-        console.log("Latest Key Retrieved:", latestKey.key);
+        // Check if the key is still valid (optional: add your own expiry logic)
+        console.log("Latest Key Retrieved for class:", classId);
+        
         return new Response(
-            JSON.stringify({ latestKey: latestKey.key }),
-            { status: 200 }
+            JSON.stringify({ 
+                success: true,
+                latestKey: latestKey.key 
+            }),
+            { 
+                status: 200,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Cache-Control': 'no-store' // Prevent caching
+                }
+            }
         );
     } catch (error) {
-        console.error("Error fetching latest key:", error);
+        console.error("Error in get-latest-key route:", error);
         return new Response(
-            JSON.stringify({ message: "Failed to retrieve the key." }),
-            { status: 500 }
+            JSON.stringify({ 
+                success: false,
+                message: "Internal server error",
+                error: error.message 
+            }),
+            { 
+                status: 500,
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            }
         );
     }
 };
