@@ -123,10 +123,12 @@ class AttendanceController {
     });
 
     // Add buffer to radius for GPS inaccuracy (e.g., 10 meters)
-    const bufferRadius = attendanceSession.radius + 10;
+    const bufferRadius = attendanceSession.radius ;
 
     if (distance > bufferRadius) {
-        throw new Error(`TooFar:${Math.round(distance)}:${bufferRadius}`);
+        throw new Error( `You are too far from the class location. Distance: ${Math.round(distance)} meters, Allowed Radius: ${attendanceSession.radius} meters. 
+        Teacher Location: (${attendanceSession.location.coordinates[1]}, ${attendanceSession.location.coordinates[0]}), 
+        Your Location: (${location.latitude}, ${location.longitude}).`);
     }
 
     const alreadyMarked = attendanceSession.attendees.some(

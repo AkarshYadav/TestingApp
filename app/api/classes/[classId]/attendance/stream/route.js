@@ -1,69 +1,97 @@
-// Optimized SSE route
-import {validateSession} from '@/lib/session.js'
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from "@/app/api/auth/[...nextauth]/authOptions";
 import connect from "@/lib/mongodb/mongoose";
+import AttendanceSession from "@/lib/models/attendance.model";
+
 export async function GET(request, context) {
-  try {
-    await Promise.all([validateSession(), connect()]);
-    
-    const { classId } = await context.params;
-    let lastAttendees = null;
+  // Ensure MongoDB connection
+  await connect();
 
-    const stream = new ReadableStream({
-      start(controller) {
-        let intervalId;
-        let isStreamClosed = false;
-
-        const sendEvent = (data) => {
-          if (isStreamClosed) return;
-          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`));
-        };
-
-        const fetchAttendance = async () => {
-          try {
-            // Only fetch necessary fields
-            const activeSession = await AttendanceSession.findOne(
-              { class: classId, status: 'active' },
-              { 'attendees.student': 1, 'attendees.markedAt': 1 }
-            ).lean();
-
-            if (activeSession) {
-              // Only send updates if data has changed
-              const currentAttendees = JSON.stringify(activeSession.attendees);
-              if (currentAttendees !== lastAttendees) {
-                lastAttendees = currentAttendees;
-                sendEvent({
-                  type: 'attendance-update',
-                  attendees: activeSession.attendees
-                });
-              }
-            }
-          } catch (error) {
-            console.error("Error fetching attendance:", error);
-          }
-        };
-
-        fetchAttendance();
-        intervalId = setInterval(fetchAttendance, 5000);
-
-        request.signal.addEventListener("abort", () => {
-          isStreamClosed = true;
-          clearInterval(intervalId);
-          controller.close();
-        });
-      }
-    });
-
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      },
-    });
-  } catch (error) {
-    return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
-      status: 500,
+  // Authenticate the user
+  const session = await getServerSession(authOptions);
+  if (!session) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
   }
+
+  // Await params to avoid sync-access error
+  const { classId } = await context.params;
+
+  // Set up the readable stream
+  const stream = new ReadableStream({
+    start(controller) {
+      let intervalId; // For polling attendance
+      let isStreamClosed = false; // Track if the stream is closed
+
+      // Function to send SSE events to the client
+      const sendEvent = (data) => {
+        if (isStreamClosed) return;
+
+        try {
+          const formattedEvent = `data: ${JSON.stringify(data)}\n\n`;
+          controller.enqueue(new TextEncoder().encode(formattedEvent));
+        } catch (error) {
+          console.error("Error while sending event:", error);
+          cleanup(); // Ensure cleanup if sending fails
+        }
+      };
+
+      // Function to poll the attendance data
+      const fetchAttendance = async () => {
+        try {
+          const activeSession = await AttendanceSession.findOne({
+            class: classId,
+            status: 'active',
+          }).populate('attendees.student', 'name collegeId');
+
+          if (activeSession) {
+            sendEvent({
+              type: 'attendance-update',
+              attendees: activeSession.attendees.map((attendee) => ({
+                name: attendee.student.name,
+                collegeId: attendee.student.collegeId,
+                markedAt: attendee.markedAt,
+              })),
+            });
+          }
+        } catch (error) {
+          console.error("Error fetching attendance:", error);
+        }
+      };
+
+      // Start polling immediately and every 5 seconds
+      fetchAttendance();
+      intervalId = setInterval(fetchAttendance, 5000);
+
+      // Cleanup function for resources
+      const cleanup = () => {
+        if (isStreamClosed) return;
+        isStreamClosed = true;
+        if (intervalId) clearInterval(intervalId); // Stop polling
+        controller.close(); // Close the stream
+      };
+
+      // Listen for client disconnection
+      request.signal.addEventListener("abort", () => {
+        console.log("Client disconnected. Cleaning up...");
+        cleanup();
+      });
+    },
+
+    cancel() {
+      console.log("Stream canceled.");
+    },
+  });
+
+  // Return the stream as an SSE response
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    },
+  });
 }
+
