@@ -76,7 +76,7 @@ const Actions = () => {
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
                             className="text-sm cursor-pointer"
-                            onClick={() => signOut()}
+                            onClick={() => signOut({ callbackUrl: "/signin" })}
                         >
                             Sign out
                         </DropdownMenuItem>
