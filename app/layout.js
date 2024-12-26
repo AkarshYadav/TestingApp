@@ -2,7 +2,7 @@
 import localFont from "next/font/local";
 import "./globals.css";
 import { SessionProvider } from "next-auth/react";
-import { ToastContainer } from 'react-toastify';
+
 
 
 const geistSans = localFont({
@@ -24,7 +24,6 @@ export default function RootLayout({ children }) {
       >
         <SessionProvider>
           {children}
-          <ToastContainer position="bottom-right" theme="colored"/>
         </SessionProvider>
       </body>
     </html>

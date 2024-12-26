@@ -44,7 +44,7 @@ const SignUp = () => {
       const response = await axios.post("/api/auth/register", formData);
 
       if (response.data.user) {
-        toast.success("Registration successful!");
+        // toast.success("Registration successful!");
         setEmail("");
         setPassword("");
         setLoading(false);
