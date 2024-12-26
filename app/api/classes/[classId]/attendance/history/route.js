@@ -4,7 +4,7 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/authOptions";
 import connect from '@/lib/mongodb/mongoose';
 import AttendanceSession from "@/lib/models/attendance.model";
 import Class from "@/lib/models/class.model";
-
+import Enrollment from "@/lib/models/enrollment.model";
 
 export async function GET(request, context) {
   await connect();
